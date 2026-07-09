@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><style>body{margin:0}</style>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<defs>
+<pattern id="tap" width="72" height="72" patternUnits="userSpaceOnUse">
+  <rect width="72" height="72" fill="#040C18"/>
+  <rect x="8" y="8" width="56" height="56" fill="#081627"/>
+  <polygon points="8,8 64,8 54,18 18,18" fill="#33597A"/>
+  <polygon points="8,8 18,18 18,54 8,64" fill="#224260"/>
+  <polygon points="64,8 64,64 54,54 54,18" fill="#0C2036"/>
+  <rect x="18" y="18" width="36" height="36" fill="#16304C"/>
+  <rect x="18" y="18" width="36" height="2.5" fill="#5580A8" opacity=".9"/>
+  <rect x="-7" y="-7" width="14" height="14" fill="#1F3F60"/>
+  <rect x="65" y="-7" width="14" height="14" fill="#1F3F60"/>
+  <rect x="-7" y="65" width="14" height="14" fill="#1F3F60"/>
+  <rect x="65" y="65" width="14" height="14" fill="#1F3F60"/>
+</pattern>
+<radialGradient id="sheen" cx="0.5" cy="0.35" r="0.8">
+  <stop offset="0%" stop-color="#fff" stop-opacity="0.14"/>
+  <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+</radialGradient>
+<clipPath id="oct"><polygon points="256,40 409,103 472,256 409,409 256,472 103,409 40,256 103,103"/></clipPath>
+</defs>
+<rect width="512" height="512" rx="116" fill="#14161A"/>
+<g clip-path="url(#oct)">
+  <rect width="512" height="512" fill="url(#tap)"/>
+  <rect width="512" height="512" fill="url(#sheen)"/>
+</g>
+<polygon points="256,40 409,103 472,256 409,409 256,472 103,409 40,256 103,103" fill="none" stroke="#C6A15B" stroke-width="7"/>
+</svg>
