@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="2868" viewBox="0 0 1320 2868">
+<defs>
+  <linearGradient id="lac-ot" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#4EBFCB"/>
+    <stop offset="50%" stop-color="#33A9B7"/>
+    <stop offset="100%" stop-color="#2795A3"/>
+  </linearGradient>
+  <filter id="grain-ot">
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="11" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.03 0"/>
+  </filter>
+  
+  <radialGradient id="sheen-ot" cx="0.5" cy="0.3" r="0.75">
+    <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16"/>
+    <stop offset="55%" stop-color="#ffffff" stop-opacity="0.056"/>
+    <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="vig-ot" cx="0.5" cy="0.5" r="0.72">
+    <stop offset="0%" stop-color="#000000" stop-opacity="0"/>
+    <stop offset="62%" stop-color="#000000" stop-opacity="0"/>
+    <stop offset="100%" stop-color="#000000" stop-opacity="0.22"/>
+  </radialGradient></defs>
+
+  <rect width="1320" height="2868" fill="url(#lac-ot)"/>
+  <rect width="1320" height="2868" filter="url(#grain-ot)"/>
+  
+  <rect width="1320" height="2868" fill="url(#sheen-ot)"/>
+  <rect width="1320" height="2868" fill="url(#vig-ot)"/>
+</svg>

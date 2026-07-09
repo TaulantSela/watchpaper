@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="2868" viewBox="0 0 1320 2868">
+<defs>
+  <filter id="grain-sp">
+    <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="2" seed="21" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 0.97  0 0 0 0.05 0"/>
+  </filter></defs>
+
+  <rect width="1320" height="2868" fill="#1B1B1A"/>
+  <path d="M0 0 H1320 V2868 H0 Z M1650 1434 A990 990 0 1 0 -330 1434 A990 990 0 1 0 1650 1434 Z" fill="#000000" fill-opacity="0.12" fill-rule="evenodd"/>
+  <circle cx="660" cy="1434" r="990" fill="none" stroke="#0A0A0A" stroke-opacity="0.75" stroke-width="7"/>
+  <circle cx="660" cy="1434" r="996" fill="none" stroke="#3A3A37" stroke-opacity="0.7" stroke-width="2.5"/>
+  <rect width="1320" height="2868" filter="url(#grain-sp)"/>
+</svg>
