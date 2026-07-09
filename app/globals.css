@@ -332,9 +332,14 @@ h1 em {
   transition: opacity 0.15s;
 }
 
-.save-btn:disabled {
+.save-btn[aria-disabled='true'] {
   opacity: 0.6;
   cursor: default;
+}
+
+.save-btn.ready {
+  background: var(--ink);
+  color: var(--bg);
 }
 
 .save-btn:focus-visible {
@@ -380,6 +385,7 @@ h1 em {
   line-height: 1.5;
   margin: 0;
   max-width: 40ch;
+  min-height: 1.2em;
 }
 
 /* ---- empty state ---- */
