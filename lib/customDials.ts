@@ -11,6 +11,8 @@ export type CustomDial = {
   colors?: string[];
   /** photo kind only: does the lock-screen clock need dark ink over it */
   light?: boolean;
+  /** which watch this pairs with, e.g. "Tissot PRX Powermatic 80, green waffle" */
+  pairs?: string;
 };
 
 const KEY = 'watchpaper.custom';
@@ -32,15 +34,23 @@ export function loadCustomDials(): CustomDial[] {
     if (typeof d.id !== 'string' || typeof d.name !== 'string') continue;
     // entries saved before the photo feature have no `kind` — they are params
     const kind = d.kind === 'photo' ? 'photo' : 'params';
+    const pairs = typeof d.pairs === 'string' ? d.pairs : undefined;
     if (kind === 'photo') {
-      dials.push({ id: d.id, name: d.name, kind, light: d.light === true });
+      dials.push({ id: d.id, name: d.name, kind, light: d.light === true, pairs });
     } else if (
       FAMILIES.some((f) => f.key === d.family) &&
       Array.isArray(d.colors) &&
       d.colors.length > 0 &&
       d.colors.every(isHex)
     ) {
-      dials.push({ id: d.id, name: d.name, kind, family: d.family as FamilyKey, colors: d.colors as string[] });
+      dials.push({
+        id: d.id,
+        name: d.name,
+        kind,
+        family: d.family as FamilyKey,
+        colors: d.colors as string[],
+        pairs,
+      });
     }
   }
   return dials;

@@ -33,7 +33,7 @@ function toUiDials(customs: CustomDial[]): UiDial[] {
   const customUi: UiDial[] = customs.map((c) => ({
     slug: c.id,
     name: c.name,
-    sub: 'from your photo',
+    sub: c.pairs ? `pairs with the ${c.pairs}` : 'from your photo',
     famLabel:
       c.kind === 'photo'
         ? 'Your dial'
@@ -362,11 +362,17 @@ export default function Home() {
                     </button>
                   );
                 })}
+                <Link href="/add" className="pick studio-tile">
+                  <span className="mini">
+                    <span className="studio-plus">⌚</span>
+                  </span>
+                  <span className="mini-name">Find my watch</span>
+                </Link>
                 <Link href="/studio" className="pick studio-tile">
                   <span className="mini">
                     <span className="studio-plus">📷</span>
                   </span>
-                  <span className="mini-name">Match my watch</span>
+                  <span className="mini-name">From a photo</span>
                 </Link>
               </div>
               {customs.length > 0 && (
@@ -412,8 +418,8 @@ export default function Home() {
             <div className="empty">
               Your collection is empty.
               <br />
-              Tap <strong>Edit collection</strong> and pick the watches you own — or{' '}
-              <Link href="/studio">photograph yours</Link>.
+              Tap <strong>Edit collection</strong>, <Link href="/add">find your watch</Link>, or{' '}
+              <Link href="/studio">photograph it</Link>.
             </div>
           )}
 
