@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { addCustomDial, removeCustomDial } from '@/lib/customDials';
 import {
   canvasToBlob,
+  cleanDialDisc,
   clockNeedsDarkInk,
   composeWallpaper,
   type DialCrop,
@@ -115,6 +116,8 @@ export default function Studio() {
   const dragRef = useRef<{ x: number; y: number; pan: [number, number] } | null>(null);
   const [crop, setCrop] = useState<DialCrop | null>(null);
   const [styleKey, setStyleKey] = useState<StyleKey>('showcase');
+  const [clean, setClean] = useState(true);
+  const cleanedRef = useRef<HTMLCanvasElement | null>(null);
   const [stylePreviews, setStylePreviews] = useState<{ showcase: string; macro: string } | null>(null);
   const [bigPreview, setBigPreview] = useState<string | null>(null);
   const [photoLight, setPhotoLight] = useState(false);
@@ -241,17 +244,28 @@ export default function Studio() {
     const img = imgRef.current;
     const c = cropFromView();
     if (!img || !c) return;
+    cleanedRef.current = cleanDialDisc(img, c);
     setCrop(c);
     setSaved(false);
     setError(null);
     extractPalette();
+  };
+
+  // style-card thumbnails follow framing + the clean toggle
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!crop || !img) {
+      setStylePreviews(null);
+      return;
+    }
+    const cleaned = clean ? cleanedRef.current : null;
     const mkPreview = (layout: PhotoLayout, w: number, h: number) =>
-      composeWallpaper(img, c, layout, w, h).toDataURL('image/jpeg', 0.85);
+      composeWallpaper(img, crop, layout, w, h, cleaned).toDataURL('image/jpeg', 0.85);
     setStylePreviews({
       showcase: mkPreview('showcase', 180, 391),
       macro: mkPreview('macro', 180, 391),
     });
-  };
+  }, [crop, clean]);
 
   // big preview for photo styles; redraw styles preview via SVG below
   useEffect(() => {
@@ -260,11 +274,11 @@ export default function Studio() {
       setBigPreview(null);
       return;
     }
-    const canvas = composeWallpaper(img, crop, styleKey, 396, 860);
+    const canvas = composeWallpaper(img, crop, styleKey, 396, 860, clean ? cleanedRef.current : null);
     previewCanvasRef.current = canvas;
     setPhotoLight(clockNeedsDarkInk(canvas));
     setBigPreview(canvas.toDataURL('image/jpeg', 0.88));
-  }, [crop, styleKey]);
+  }, [crop, styleKey, clean]);
 
   // a save belongs to the exact style/colour/family/name it was made with
   useEffect(() => {
@@ -290,7 +304,7 @@ export default function Studio() {
       } else {
         const img = imgRef.current;
         if (!img || !crop) return;
-        const master = composeWallpaper(img, crop, styleKey, MASTER_W, MASTER_H);
+        const master = composeWallpaper(img, crop, styleKey, MASTER_W, MASTER_H, clean ? cleanedRef.current : null);
         const blob = await canvasToBlob(master, 'image/jpeg', 0.92);
         const dial = addCustomDial({ kind: 'photo', name: name.trim() || 'My watch', light: photoLight });
         try {
@@ -389,6 +403,10 @@ export default function Studio() {
       {crop && stylePreviews && (
         <div className="studio-step">
           <span className="chips-label">3 · Style</span>
+          <label className="clean-toggle">
+            <input type="checkbox" checked={clean} onChange={(e) => setClean(e.target.checked)} />
+            Remove hands, text &amp; subdials — keep only the dial surface
+          </label>
           <div className="style-cards" role="group" aria-label="Wallpaper style">
             <button
               className={`style-card${styleKey === 'showcase' ? ' active' : ''}`}
