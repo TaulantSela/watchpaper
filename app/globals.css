@@ -500,6 +500,12 @@ footer {
   width: 100%;
 }
 
+.photo-btns {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .file-btn {
   display: inline-block;
   background: var(--panel);

@@ -210,15 +210,31 @@ export default function Studio() {
 
       <div className="studio-step">
         <span className="chips-label">1 · Photo</span>
-        <label className="file-btn">
-          {hasPhoto ? 'Retake photo' : 'Take or choose a photo'}
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => onFile(e.target.files?.[0])}
-          />
-        </label>
+        <div className="photo-btns">
+          <label className="file-btn">
+            {hasPhoto ? 'Retake photo' : 'Take a photo'}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => {
+                onFile(e.target.files?.[0]);
+                e.currentTarget.value = '';
+              }}
+            />
+          </label>
+          <label className="file-btn">
+            Choose from gallery
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                onFile(e.target.files?.[0]);
+                e.currentTarget.value = '';
+              }}
+            />
+          </label>
+        </div>
       </div>
 
       {hasPhoto && (
