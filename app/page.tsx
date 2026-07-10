@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ART_H, ART_W, DIALS, SIZES } from '@/lib/dials';
 import { loadCustomDials, removeCustomDial, type CustomDial } from '@/lib/customDials';
+import { deletePhoto, getPhoto } from '@/lib/photoStore';
 import { FAMILIES, luminance, renderFamily } from '@/lib/generator';
 
 const COLLECTION_KEY = 'watchpaper.collection';
@@ -33,8 +34,11 @@ function toUiDials(customs: CustomDial[]): UiDial[] {
     slug: c.id,
     name: c.name,
     sub: 'from your photo',
-    famLabel: FAMILIES.find((f) => f.key === c.family)?.label ?? c.family,
-    lightDial: luminance(c.colors[0]) > 0.6,
+    famLabel:
+      c.kind === 'photo'
+        ? 'Your dial'
+        : FAMILIES.find((f) => f.key === c.family)?.label ?? 'Custom',
+    lightDial: c.kind === 'photo' ? !!c.light : luminance(c.colors![0]) > 0.6,
     custom: c,
   }));
   return [...builtins, ...customUi];
@@ -51,14 +55,21 @@ function readOwnedBuiltins(): string[] {
   return parsed.filter((s): s is string => typeof s === 'string' && DIALS.some((d) => d.slug === s));
 }
 
-async function svgSource(dial: UiDial): Promise<string> {
-  if (dial.custom) return renderFamily(dial.custom.family, dial.custom.colors);
-  return fetch(`/dials/${dial.file}.svg`).then((r) => r.text());
+async function sourceBlob(dial: UiDial): Promise<Blob> {
+  if (dial.custom?.kind === 'photo') {
+    const blob = await getPhoto(dial.custom.id);
+    if (!blob) throw new Error('This wallpaper is missing from this browser’s storage.');
+    return blob;
+  }
+  const xml = dial.custom
+    ? renderFamily(dial.custom.family!, dial.custom.colors!)
+    : await fetch(`/dials/${dial.file}.svg`).then((r) => r.text());
+  return new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
 }
 
 async function renderPng(dial: UiDial, w: number, h: number): Promise<Blob> {
-  const xml = await svgSource(dial);
-  const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }));
+  const src = await sourceBlob(dial);
+  const url = URL.createObjectURL(src);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const i = new Image();
@@ -70,8 +81,11 @@ async function renderPng(dial: UiDial, w: number, h: number): Promise<Blob> {
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d')!;
-    const s = Math.max(w / ART_W, h / ART_H);
-    ctx.drawImage(img, (w - ART_W * s) / 2, (h - ART_H * s) / 2, ART_W * s, ART_H * s);
+    // photo masters carry their own pixel size; vectors use the artboard size
+    const sw = dial.custom?.kind === 'photo' ? img.naturalWidth : ART_W;
+    const sh = dial.custom?.kind === 'photo' ? img.naturalHeight : ART_H;
+    const s = Math.max(w / sw, h / sh);
+    ctx.drawImage(img, (w - sw * s) / 2, (h - sh * s) / 2, sw * s, sh * s);
     return await new Promise<Blob>((resolve, reject) =>
       canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG export failed.'))), 'image/png'),
     );
@@ -90,25 +104,42 @@ function downloadFile(file: File) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-/** wallpaper URL for the Shortcuts flow — must be absolute and self-describing */
-function wallpaperUrl(dial: UiDial, w: number, h: number): string {
+/** wallpaper URL for the Shortcuts flow — null for photo dials, which never leave the device */
+function wallpaperUrl(dial: UiDial, w: number, h: number): string | null {
   const base = typeof location !== 'undefined' ? location.origin : '';
+  if (dial.custom?.kind === 'photo') return null;
   if (dial.custom) {
-    const colors = dial.custom.colors.map((c) => c.replace('#', '')).join(',');
+    const colors = dial.custom.colors!.map((c) => c.replace('#', '')).join(',');
     return `${base}/api/wallpaper?family=${dial.custom.family}&colors=${colors}&w=${w}&h=${h}`;
   }
   return `${base}/api/wallpaper?dial=${dial.slug}&w=${w}&h=${h}`;
 }
 
-/** custom dials render client-side; cache SVG object URLs per dial id */
+/** custom dials render client-side; cache object URLs per dial while mounted */
 function CustomDialImg({ dial, alt }: { dial: CustomDial; alt: string }) {
-  const svg = useMemo(() => renderFamily(dial.family, dial.colors), [dial]);
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    const u = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [svg]);
+    let revoked: string | null = null;
+    let cancelled = false;
+    const assign = (blob: Blob) => {
+      if (cancelled) return;
+      revoked = URL.createObjectURL(blob);
+      setUrl(revoked);
+    };
+    if (dial.kind === 'photo') {
+      getPhoto(dial.id).then((b) => b && assign(b)).catch(() => setUrl(null));
+    } else {
+      assign(
+        new Blob([renderFamily(dial.family!, dial.colors!)], {
+          type: 'image/svg+xml;charset=utf-8',
+        }),
+      );
+    }
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [dial]);
   return url ? <img src={url} alt={alt} /> : null;
 }
 
@@ -204,6 +235,8 @@ export default function Home() {
 
   const removeCustom = useCallback((id: string) => {
     removeCustomDial(id);
+    void deletePhoto(id).catch(() => {}); // no blob for params dials; ignore
+
     setCustoms((prev) => {
       const next = prev.filter((c) => c.id !== id);
       setCurrent((c) => {
@@ -269,12 +302,14 @@ export default function Home() {
   const setViaShortcut = () => {
     if (!dial) return;
     const url = wallpaperUrl(dial, devW, devH);
+    if (!url) return;
     location.href = `shortcuts://run-shortcut?name=${encodeURIComponent('WatchPaper')}&input=text&text=${encodeURIComponent(url)}`;
   };
 
   const copyWallpaperUrl = async () => {
     if (!dial) return;
     const url = wallpaperUrl(dial, devW, devH);
+    if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
       note('Wallpaper URL copied.');
@@ -282,6 +317,8 @@ export default function Home() {
       note(url, 20000); // clipboard blocked — show the URL so it can be copied by hand
     }
   };
+
+  const shortcutsAvailable = dial ? wallpaperUrl(dial, devW, devH) !== null : false;
 
   const loaded = ownedBuiltins !== null;
 
@@ -428,7 +465,16 @@ export default function Home() {
                 <button className="shortcut-toggle" onClick={() => setShortcutsOpen((o) => !o)} aria-expanded={shortcutsOpen}>
                   {shortcutsOpen ? 'Hide' : 'Set automatically · iOS Shortcut'}
                 </button>
-                {shortcutsOpen && (
+                {shortcutsOpen && !shortcutsAvailable && (
+                  <div className="shortcut-panel">
+                    <p>
+                      Photo wallpapers are stored only on this device and never uploaded, so
+                      there&rsquo;s no URL a Shortcut could fetch. Use <strong>Save wallpaper</strong>{' '}
+                      above — the share sheet adds it to Photos.
+                    </p>
+                  </div>
+                )}
+                {shortcutsOpen && shortcutsAvailable && (
                   <div className="shortcut-panel">
                     <p>
                       One-time setup — in the <strong>Shortcuts</strong> app, create a shortcut

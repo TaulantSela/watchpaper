@@ -3,9 +3,14 @@ import { FAMILIES, type FamilyKey } from './generator';
 export type CustomDial = {
   id: string;
   name: string;
-  family: FamilyKey;
-  /** 1-3 anchor hex colours extracted from the user's photo */
-  colors: string[];
+  /** 'params' = re-drawn in a finish family; 'photo' = composed from the photo (master in IndexedDB) */
+  kind: 'params' | 'photo';
+  /** params kind only: finish family */
+  family?: FamilyKey;
+  /** params kind only: 1-3 anchor hex colours extracted from the photo */
+  colors?: string[];
+  /** photo kind only: does the lock-screen clock need dark ink over it */
+  light?: boolean;
 };
 
 const KEY = 'watchpaper.custom';
@@ -20,17 +25,25 @@ export function loadCustomDials(): CustomDial[] {
     parsed = [];
   }
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter(
-    (d): d is CustomDial =>
-      !!d &&
-      typeof d === 'object' &&
-      typeof (d as CustomDial).id === 'string' &&
-      typeof (d as CustomDial).name === 'string' &&
-      FAMILIES.some((f) => f.key === (d as CustomDial).family) &&
-      Array.isArray((d as CustomDial).colors) &&
-      (d as CustomDial).colors.length > 0 &&
-      (d as CustomDial).colors.every(isHex),
-  );
+  const dials: CustomDial[] = [];
+  for (const raw of parsed) {
+    if (!raw || typeof raw !== 'object') continue;
+    const d = raw as Record<string, unknown>;
+    if (typeof d.id !== 'string' || typeof d.name !== 'string') continue;
+    // entries saved before the photo feature have no `kind` — they are params
+    const kind = d.kind === 'photo' ? 'photo' : 'params';
+    if (kind === 'photo') {
+      dials.push({ id: d.id, name: d.name, kind, light: d.light === true });
+    } else if (
+      FAMILIES.some((f) => f.key === d.family) &&
+      Array.isArray(d.colors) &&
+      d.colors.length > 0 &&
+      d.colors.every(isHex)
+    ) {
+      dials.push({ id: d.id, name: d.name, kind, family: d.family as FamilyKey, colors: d.colors as string[] });
+    }
+  }
+  return dials;
 }
 
 export function saveCustomDials(dials: CustomDial[]) {

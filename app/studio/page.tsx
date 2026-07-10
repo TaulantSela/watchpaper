@@ -2,17 +2,27 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { addCustomDial } from '@/lib/customDials';
+import { addCustomDial, removeCustomDial } from '@/lib/customDials';
+import {
+  canvasToBlob,
+  clockNeedsDarkInk,
+  composeWallpaper,
+  type DialCrop,
+  type PhotoLayout,
+} from '@/lib/compose';
+import { putPhoto } from '@/lib/photoStore';
 import { FAMILIES, luminance, renderFamily, type FamilyKey } from '@/lib/generator';
 
-const CANVAS = 320; // square working canvas, CSS-scaled
+const CANVAS = 320; // square framing canvas, CSS-scaled
 const CIRCLE_R = 118;
+const MASTER_W = 1440;
+const MASTER_H = 3200;
 
 type Rgb = [number, number, number];
+type StyleKey = PhotoLayout | 'redraw';
 
 function kMeans(points: Rgb[], k: number, iterations = 14): Array<{ center: Rgb; size: number }> {
   if (points.length === 0) return [];
-  // seed centers spread across the data
   const centers: Rgb[] = Array.from({ length: k }, (_, i) => points[Math.floor((i * points.length) / k)]);
   const assign = new Array<number>(points.length).fill(0);
   for (let it = 0; it < iterations; it++) {
@@ -54,7 +64,6 @@ function kMeans(points: Rgb[], k: number, iterations = 14): Array<{ center: Rgb;
 const toHex = ([r, g, b]: Rgb) =>
   '#' + [r, g, b].map((c) => Math.round(c).toString(16).padStart(2, '0')).join('');
 
-/** SVG string -> object URL, cached per key while the component lives */
 function useSvgUrl(svg: string | null): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -99,15 +108,23 @@ function FamilyChip({
 export default function Studio() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hasPhoto, setHasPhoto] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<[number, number]>([0, 0]);
   const dragRef = useRef<{ x: number; y: number; pan: [number, number] } | null>(null);
+  const [crop, setCrop] = useState<DialCrop | null>(null);
+  const [styleKey, setStyleKey] = useState<StyleKey>('showcase');
+  const [stylePreviews, setStylePreviews] = useState<{ showcase: string; macro: string } | null>(null);
+  const [bigPreview, setBigPreview] = useState<string | null>(null);
+  const [photoLight, setPhotoLight] = useState(false);
   const [swatches, setSwatches] = useState<string[]>([]);
   const [primary, setPrimary] = useState<string | null>(null);
   const [family, setFamily] = useState<FamilyKey>('sunray');
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -124,21 +141,47 @@ export default function Studio() {
 
   useEffect(draw, [draw, hasPhoto]);
 
+  const pendingUrlRef = useRef<string | null>(null);
+
   const onFile = (file: File | undefined) => {
     if (!file) return;
+    if (pendingUrlRef.current) URL.revokeObjectURL(pendingUrlRef.current);
+    const url = URL.createObjectURL(file);
+    pendingUrlRef.current = url;
     const img = new Image();
     img.onload = () => {
+      if (pendingUrlRef.current !== url) return; // a newer photo was picked meanwhile
+      pendingUrlRef.current = null;
+      URL.revokeObjectURL(url);
       imgRef.current = img;
       setZoom(1);
       setPan([0, 0]);
+      setCrop(null);
+      setStylePreviews(null);
+      setBigPreview(null);
       setSwatches([]);
       setPrimary(null);
       setSaved(false);
+      setError(null);
       setHasPhoto(true);
-      URL.revokeObjectURL(img.src);
     };
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => {
+      if (pendingUrlRef.current === url) pendingUrlRef.current = null;
+      URL.revokeObjectURL(url);
+      setError('Could not read that image.');
+    };
+    img.src = url;
   };
+
+  /** keep the sampling circle fully inside the photo — framing can never fall off the image */
+  const clampPan = useCallback((p: [number, number], z: number): [number, number] => {
+    const img = imgRef.current;
+    if (!img) return p;
+    const base = Math.max(CANVAS / img.width, CANVAS / img.height) * z;
+    const limX = Math.max(0, (img.width * base) / 2 - CIRCLE_R);
+    const limY = Math.max(0, (img.height * base) / 2 - CIRCLE_R);
+    return [Math.min(limX, Math.max(-limX, p[0])), Math.min(limY, Math.max(-limY, p[1]))];
+  }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -149,49 +192,124 @@ export default function Studio() {
     if (!d) return;
     const rect = canvasRef.current!.getBoundingClientRect();
     const scale = CANVAS / rect.width;
-    setPan([d.pan[0] + (e.clientX - d.x) * scale, d.pan[1] + (e.clientY - d.y) * scale]);
+    setPan(
+      clampPan([d.pan[0] + (e.clientX - d.x) * scale, d.pan[1] + (e.clientY - d.y) * scale], zoom),
+    );
   };
   const onPointerUp = () => {
     dragRef.current = null;
   };
 
-  const extract = () => {
+  const onZoom = (z: number) => {
+    setZoom(z);
+    setPan((p) => clampPan(p, z));
+  };
+
+  /** map the on-screen circle back into original image coordinates */
+  const cropFromView = (): DialCrop | null => {
+    const img = imgRef.current;
+    if (!img) return null;
+    const base = Math.max(CANVAS / img.width, CANVAS / img.height) * zoom;
+    const dx = CANVAS / 2 - (img.width * base) / 2 + pan[0];
+    const dy = CANVAS / 2 - (img.height * base) / 2 + pan[1];
+    return { cx: (CANVAS / 2 - dx) / base, cy: (CANVAS / 2 - dy) / base, r: CIRCLE_R / base };
+  };
+
+  const extractPalette = () => {
     const ctx = canvasRef.current!.getContext('2d')!;
-    const cx = CANVAS / 2;
+    const c = CANVAS / 2;
     const data = ctx.getImageData(0, 0, CANVAS, CANVAS).data;
     const pts: Rgb[] = [];
     for (let y = 0; y < CANVAS; y += 2) {
       for (let x = 0; x < CANVAS; x += 2) {
-        if ((x - cx) ** 2 + (y - cx) ** 2 > CIRCLE_R ** 2) continue;
+        if ((x - c) ** 2 + (y - c) ** 2 > CIRCLE_R ** 2) continue;
         const i = (y * CANVAS + x) * 4;
         pts.push([data[i], data[i + 1], data[i + 2]]);
       }
     }
     const clusters = kMeans(pts, 5);
-    // drop specular glare and void-black clusters unless nothing else remains
-    const usable = clusters.filter((c) => {
-      const l = (0.2126 * c.center[0] + 0.7152 * c.center[1] + 0.0722 * c.center[2]) / 255;
+    const usable = clusters.filter((cl) => {
+      const l = (0.2126 * cl.center[0] + 0.7152 * cl.center[1] + 0.0722 * cl.center[2]) / 255;
       return l > 0.05 && l < 0.93;
     });
-    const list = (usable.length ? usable : clusters).slice(0, 5).map((c) => toHex(c.center));
+    const list = (usable.length ? usable : clusters).slice(0, 5).map((cl) => toHex(cl.center));
     setSwatches(list);
     setPrimary(list[0] ?? null);
+  };
+
+  const confirmFraming = () => {
+    const img = imgRef.current;
+    const c = cropFromView();
+    if (!img || !c) return;
+    setCrop(c);
     setSaved(false);
+    setError(null);
+    extractPalette();
+    const mkPreview = (layout: PhotoLayout, w: number, h: number) =>
+      composeWallpaper(img, c, layout, w, h).toDataURL('image/jpeg', 0.85);
+    setStylePreviews({
+      showcase: mkPreview('showcase', 180, 391),
+      macro: mkPreview('macro', 180, 391),
+    });
   };
 
-  const save = () => {
-    if (!primary) return;
-    const colors = [primary, ...swatches.filter((s) => s !== primary).slice(0, 2)];
-    addCustomDial({ name: name.trim() || 'My watch', family, colors });
-    setSaved(true);
-  };
+  // big preview for photo styles; redraw styles preview via SVG below
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!crop || !img || styleKey === 'redraw') {
+      setBigPreview(null);
+      return;
+    }
+    const canvas = composeWallpaper(img, crop, styleKey, 396, 860);
+    previewCanvasRef.current = canvas;
+    setPhotoLight(clockNeedsDarkInk(canvas));
+    setBigPreview(canvas.toDataURL('image/jpeg', 0.88));
+  }, [crop, styleKey]);
 
-  const previewSvg = useMemo(
-    () => (primary ? renderFamily(family, [primary]) : null),
-    [primary, family],
+  // a save belongs to the exact style/colour/family/name it was made with
+  useEffect(() => {
+    setSaved(false);
+  }, [styleKey, primary, family, name]);
+
+  const redrawSvg = useMemo(
+    () => (styleKey === 'redraw' && primary ? renderFamily(family, [primary]) : null),
+    [styleKey, primary, family],
   );
-  const previewUrl = useSvgUrl(previewSvg);
-  const lightDial = primary ? luminance(primary) > 0.6 : false;
+  const redrawUrl = useSvgUrl(redrawSvg);
+  const redrawLight = primary ? luminance(primary) > 0.6 : false;
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (styleKey === 'redraw') {
+        if (!primary) return;
+        const colors = [primary, ...swatches.filter((s) => s !== primary).slice(0, 2)];
+        addCustomDial({ kind: 'params', name: name.trim() || 'My watch', family, colors });
+      } else {
+        const img = imgRef.current;
+        if (!img || !crop) return;
+        const master = composeWallpaper(img, crop, styleKey, MASTER_W, MASTER_H);
+        const blob = await canvasToBlob(master, 'image/jpeg', 0.92);
+        const dial = addCustomDial({ kind: 'photo', name: name.trim() || 'My watch', light: photoLight });
+        try {
+          await putPhoto(dial.id, blob);
+        } catch (err) {
+          removeCustomDial(dial.id); // don't leave a dial that can't render
+          throw err;
+        }
+      }
+      setSaved(true);
+    } catch (err) {
+      setError((err as Error).message || 'Could not save the wallpaper.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const previewLight = styleKey === 'redraw' ? redrawLight : photoLight;
+  const previewSrc = styleKey === 'redraw' ? redrawUrl : bigPreview;
 
   return (
     <main className="wrap">
@@ -204,8 +322,8 @@ export default function Studio() {
         Match <em>your</em> watch.
       </h1>
       <p className="sub">
-        Photograph the dial, frame it in the circle, and WatchPaper draws a wallpaper from its
-        exact colours. The photo never leaves your phone.
+        Photograph the dial or pick a photo, frame it in the circle, and WatchPaper turns it into
+        a wallpaper. Everything runs on your phone — the photo is never uploaded.
       </p>
 
       <div className="studio-step">
@@ -238,106 +356,140 @@ export default function Studio() {
       </div>
 
       {hasPhoto && (
-        <>
-          <div className="studio-step">
-            <span className="chips-label">2 · Frame the dial</span>
-            <div className="crop-wrap">
-              <canvas
-                ref={canvasRef}
-                width={CANVAS}
-                height={CANVAS}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-              />
-              <div className="crop-ring" aria-hidden="true" />
-            </div>
-            <label className="zoom">
-              Zoom
-              <input
-                type="range"
-                min="1"
-                max="4"
-                step="0.02"
-                value={zoom}
-                onChange={(e) => setZoom(parseFloat(e.target.value))}
-              />
-            </label>
-            <button className="save-btn" onClick={extract}>
-              Extract colours
+        <div className="studio-step">
+          <span className="chips-label">2 · Frame the dial</span>
+          <div className="crop-wrap">
+            <canvas
+              ref={canvasRef}
+              width={CANVAS}
+              height={CANVAS}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+            />
+            <div className="crop-ring" aria-hidden="true" />
+          </div>
+          <label className="zoom">
+            Zoom
+            <input
+              type="range"
+              min="1"
+              max="4"
+              step="0.02"
+              value={zoom}
+              onChange={(e) => onZoom(parseFloat(e.target.value))}
+            />
+          </label>
+          <button className="save-btn" onClick={confirmFraming}>
+            {crop ? 'Update framing' : 'Use this framing'}
+          </button>
+        </div>
+      )}
+
+      {crop && stylePreviews && (
+        <div className="studio-step">
+          <span className="chips-label">3 · Style</span>
+          <div className="style-cards" role="group" aria-label="Wallpaper style">
+            <button
+              className={`style-card${styleKey === 'showcase' ? ' active' : ''}`}
+              onClick={() => setStyleKey('showcase')}
+              aria-pressed={styleKey === 'showcase'}
+            >
+              <img src={stylePreviews.showcase} alt="" />
+              <span>Showcase</span>
+              <small>your dial, floating</small>
+            </button>
+            <button
+              className={`style-card${styleKey === 'macro' ? ' active' : ''}`}
+              onClick={() => setStyleKey('macro')}
+              aria-pressed={styleKey === 'macro'}
+            >
+              <img src={stylePreviews.macro} alt="" />
+              <span>Macro</span>
+              <small>the dial, full bleed</small>
+            </button>
+            <button
+              className={`style-card${styleKey === 'redraw' ? ' active' : ''}`}
+              onClick={() => setStyleKey('redraw')}
+              aria-pressed={styleKey === 'redraw'}
+            >
+              {primary && (
+                <span className="style-swatch" style={{ background: primary }} aria-hidden="true" />
+              )}
+              <span>Re-draw</span>
+              <small>a texture in its colours</small>
             </button>
           </div>
 
-          {swatches.length > 0 && primary && (
+          {styleKey === 'redraw' && primary && (
             <>
-              <div className="studio-step">
-                <span className="chips-label">3 · Dial colour</span>
-                <div className="swatches" role="group" aria-label="Extracted colours">
-                  {swatches.map((s) => (
-                    <button
-                      key={s}
-                      className={`swatch-btn${s === primary ? ' active' : ''}`}
-                      style={{ background: s }}
-                      onClick={() => setPrimary(s)}
-                      aria-pressed={s === primary}
-                      aria-label={`Colour ${s}`}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="studio-step">
-                <span className="chips-label">4 · Finish</span>
-                <div className="editor">
-                  {FAMILIES.map((f) => (
-                    <FamilyChip
-                      key={f.key}
-                      family={f.key}
-                      hint={f.hint}
-                      colors={[primary]}
-                      selected={family === f.key}
-                      onSelect={() => setFamily(f.key)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="studio-step">
-                <span className="chips-label">5 · Preview & save</span>
-                <div className="stage">
-                  <div className="phone">
-                    {previewUrl && <img src={previewUrl} alt="Custom wallpaper preview" />}
-                    <div className={`clock${lightDial ? ' dark-ink' : ''}`}>
-                      <div className="date">Your watch</div>
-                      <div className="time">10:09</div>
-                    </div>
-                  </div>
-                  <input
-                    className="name-input"
-                    placeholder="Name it — e.g. My Seamaster"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    maxLength={28}
+              <div className="swatches" role="group" aria-label="Extracted colours">
+                {swatches.map((s) => (
+                  <button
+                    key={s}
+                    className={`swatch-btn${s === primary ? ' active' : ''}`}
+                    style={{ background: s }}
+                    onClick={() => setPrimary(s)}
+                    aria-pressed={s === primary}
+                    aria-label={`Colour ${s}`}
                   />
-                  {saved ? (
-                    <Link href="/" className="save-btn done-link">
-                      Added ✓ — back to my watches
-                    </Link>
-                  ) : (
-                    <button className="save-btn" onClick={save}>
-                      Add to my watches
-                    </button>
-                  )}
-                </div>
+                ))}
+              </div>
+              <div className="editor">
+                {FAMILIES.map((f) => (
+                  <FamilyChip
+                    key={f.key}
+                    family={f.key}
+                    hint={f.hint}
+                    colors={[primary]}
+                    selected={family === f.key}
+                    onSelect={() => setFamily(f.key)}
+                  />
+                ))}
               </div>
             </>
           )}
-        </>
+        </div>
+      )}
+
+      {crop && previewSrc && (
+        <div className="studio-step">
+          <span className="chips-label">4 · Preview & save</span>
+          <div className="stage">
+            <div className="phone">
+              <img src={previewSrc} alt="Wallpaper preview" />
+              <div className={`clock${previewLight ? ' dark-ink' : ''}`}>
+                <div className="date">Your watch</div>
+                <div className="time">10:09</div>
+              </div>
+            </div>
+            <input
+              className="name-input"
+              placeholder="Name it — e.g. My Seamaster"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={28}
+            />
+            {saved ? (
+              <Link href="/" className="save-btn done-link">
+                Added ✓ — back to my watches
+              </Link>
+            ) : (
+              <button className="save-btn" aria-disabled={busy} onClick={() => void save()}>
+                {busy ? 'Rendering…' : 'Add to my watches'}
+              </button>
+            )}
+            <p className="hint" role="status">
+              {error ?? ''}
+            </p>
+          </div>
+        </div>
       )}
 
       <footer>
-        Colour extraction runs entirely on your device — the photo is never uploaded. The
-        generated wallpaper is an original artwork in your watch&rsquo;s colours.
+        Photos are processed entirely on your device and stored only in this browser — nothing is
+        uploaded. Photo wallpapers therefore can&rsquo;t use the Shortcuts URL; save them via the
+        share sheet instead.
       </footer>
     </main>
   );
