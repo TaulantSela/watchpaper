@@ -393,6 +393,11 @@ export function grainPalette(base: string): GrainPalette {
 
 function grain(id: string, pal: GrainPalette, opts?: RenderOptions): string {
   const cx = ART_W / 2, cy = ART_H / 2, stepR = 990;
+  // the step ring was designed for near-black dials; on light bases the full-
+  // strength ring reads as a hard-edged plate, so fade it with base luminance
+  const lum = luminance(pal.base);
+  const k = lum >= 0.3 ? 0 : lum >= 0.12 ? 0.45 : 1;
+  const ringDark = k === 1 ? '#0A0A0A' : shade(pal.base, -0.4);
   const defs = `
   <filter id="grain-${id}">
     <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="2" seed="21" result="n"/>
@@ -400,9 +405,9 @@ function grain(id: string, pal: GrainPalette, opts?: RenderOptions): string {
   </filter>`;
   const body = `
   <rect width="${ART_W}" height="${ART_H}" fill="${pal.base}"/>
-  <path d="M0 0 H${ART_W} V${ART_H} H0 Z M${cx + stepR} ${cy} A${stepR} ${stepR} 0 1 0 ${cx - stepR} ${cy} A${stepR} ${stepR} 0 1 0 ${cx + stepR} ${cy} Z" fill="#000000" fill-opacity="0.12" fill-rule="evenodd"/>
-  <circle cx="${cx}" cy="${cy}" r="${stepR}" fill="none" stroke="#0A0A0A" stroke-opacity="0.75" stroke-width="7"/>
-  <circle cx="${cx}" cy="${cy}" r="${stepR + 6}" fill="none" stroke="${pal.ringLight}" stroke-opacity="0.7" stroke-width="2.5"/>
+  <path d="M0 0 H${ART_W} V${ART_H} H0 Z M${cx + stepR} ${cy} A${stepR} ${stepR} 0 1 0 ${cx - stepR} ${cy} A${stepR} ${stepR} 0 1 0 ${cx + stepR} ${cy} Z" fill="#000000" fill-opacity="${0.12 * k}" fill-rule="evenodd"/>
+  <circle cx="${cx}" cy="${cy}" r="${stepR}" fill="none" stroke="${ringDark}" stroke-opacity="${0.75 * k}" stroke-width="7"/>
+  <circle cx="${cx}" cy="${cy}" r="${stepR + 6}" fill="none" stroke="${pal.ringLight}" stroke-opacity="${0.7 * k}" stroke-width="2.5"/>
   <rect width="${ART_W}" height="${ART_H}" filter="url(#grain-${id})"/>`;
   return svgDoc(defs, body, opts);
 }
@@ -457,8 +462,13 @@ export function renderFamily(
       return tapisserie(id, tapisseriePalette(base), opts);
     case 'stripes':
       return stripes(id, stripesPalette(base), opts);
-    case 'sunray':
-      return sunray(id, sunrayPalette(base), 101, opts);
+    case 'sunray': {
+      const pal = sunrayPalette(base);
+      // an accent colour (e.g. a GMT bezel half) tints the highlight wedges,
+      // so Pepsi/Batman/Sprite dials don't all collapse into the same black
+      if (colors[1]) pal.hi = shade(colors[1], 0.3);
+      return sunray(id, pal, 101, opts);
+    }
     case 'lacquer':
       return lacquer(id, lacquerPalette(base), opts);
     case 'snow':
